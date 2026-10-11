@@ -2,7 +2,7 @@ import type { NormalizedMarket, Platform } from "../types";
 
 const BASE = "https://gamma-api.polymarket.com/markets";
 const PAGE_LIMIT = 500;
-const MAX_PAGES = 6; // up to 3000 markets
+const MAX_PAGES = 8; // up to 4000 markets
 
 interface PMMarket {
   id: string;
@@ -42,17 +42,32 @@ function parseJSONArray<T = string>(s?: string): T[] {
 
 export async function fetchPolymarket(): Promise<NormalizedMarket[]> {
   try {
-    // The gamma /markets endpoint supports a few different sort orders. We fetch
-    // the top markets by 24h volume (the most-traded) plus the most recently
-    // created markets, then de-duplicate. This gives us breadth (new markets
-    // people are searching for) and depth (popular markets).
-    const [byVol, byNew] = await Promise.all([
-      fetchPage({ limit: PAGE_LIMIT, order: "volume24hr", ascending: "false" }),
-      fetchPage({ limit: PAGE_LIMIT, order: "startDate", ascending: "false" }),
+    // We need breadth, not just the most-traded. Today's 24h volume is dominated
+    // by daily sports games, so a single "top by 24h volume" page would hide
+    // every long-tail market (recession, OpenAI, etc). We pull several
+    // different sort orders in parallel and de-duplicate by id.
+    const [
+      byVol24,
+      byVolTotal,
+      byNewest,
+      byEndingSoon,
+      byLiquidity,
+    ] = await Promise.all([
+      fetchPage({ limit: PAGE_LIMIT, order: "volume24hr",   ascending: "false" }),
+      fetchPage({ limit: PAGE_LIMIT, order: "volumeNum",    ascending: "false" }),
+      fetchPage({ limit: PAGE_LIMIT, order: "startDate",    ascending: "false" }),
+      fetchPage({ limit: PAGE_LIMIT, order: "endDate",      ascending: "true"  }),
+      fetchPage({ limit: PAGE_LIMIT, order: "liquidityNum", ascending: "false" }),
     ]);
     const seen = new Set<string>();
     const all: PMMarket[] = [];
-    for (const m of [...byVol, ...byNew]) {
+    for (const m of [
+      ...byVol24,
+      ...byVolTotal,
+      ...byNewest,
+      ...byEndingSoon,
+      ...byLiquidity,
+    ]) {
       const key = String(m.id);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -137,6 +152,75 @@ async function fetchPage(opts: PageOpts): Promise<PMMarket[]> {
   });
   if (!res.ok) throw new Error(`Polymarket ${res.status}`);
   return await res.json();
+}
+
+// ---------- Public text search ----------
+// Polymarket exposes a server-side full-text search at /public-search.
+// We hit it on-demand per query so the local index doesn't have to contain
+// every long-tail market.
+
+interface PMSearchEvent {
+  id: string;
+  slug: string;
+  title: string;
+  description?: string;
+  category?: string;
+  endDate?: string;
+  liquidity?: string | number;
+  volume24hr?: string | number;
+  volumeNum?: string | number;
+  outcomes?: string;
+  outcomePrices?: string;
+}
+
+interface PMSearchResponse {
+  events: PMSearchEvent[];
+  pagination?: { hasMore?: boolean; totalResults?: number };
+}
+
+export async function searchPolymarket(q: string, limit = 30): Promise<NormalizedMarket[]> {
+  try {
+    if (!q || !q.trim()) return [];
+    const url = `https://gamma-api.polymarket.com/public-search?q=${encodeURIComponent(q.trim())}`;
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: { "user-agent": "predictry/0.1" },
+    });
+    if (!res.ok) return [];
+    const data: PMSearchResponse = await res.json();
+    const events = (data.events || []).slice(0, limit);
+    return events.map((e) => {
+      const prices = parseJSONArray<string>(e.outcomePrices).map((p) => safeNum(p, 0.5));
+      const outcomes = parseJSONArray<string>(e.outcomes);
+      let yes = 0.5;
+      const yesIdx = outcomes.findIndex((o) => /^yes$/i.test(o));
+      if (yesIdx >= 0 && prices[yesIdx] > 0) yes = prices[yesIdx];
+      else if (prices[0] > 0) yes = prices[0];
+      const no = Math.max(0, Math.min(1, 1 - yes));
+      const platform: Platform = "polymarket";
+      const cat = inferCategory(e.title, e.description, []);
+      return {
+        id: `${platform}:${e.id}`,
+        platform,
+        externalId: e.id,
+        title: e.title,
+        description: e.description,
+        category: cat,
+        url: `https://polymarket.com/event/${e.slug}`,
+        yesPrice: yes,
+        noPrice: no,
+        volume24h: safeNum(e.volume24hr),
+        totalVolume: safeNum(e.volumeNum),
+        liquidity: safeNum(e.liquidity),
+        closesAt: e.endDate,
+        createdAt: undefined,
+        tags: [],
+        raw: e,
+      };
+    });
+  } catch {
+    return [];
+  }
 }
 
 // ---------- Category inference ----------

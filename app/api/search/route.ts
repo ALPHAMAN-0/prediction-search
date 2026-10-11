@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAllMarkets, getArbitrageOpportunities } from "@/lib/aggregator";
+import { searchPolymarket } from "@/lib/sources/polymarket";
 import { applyFilters, expandQuery, scoreMarket, tokenize } from "@/lib/match";
+import type { NormalizedMarket } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,9 +20,27 @@ export async function GET(req: NextRequest) {
   const limit = clampInt(parseInt(url.searchParams.get("limit") || "60", 10), 1, 200);
   const includeArbitrage = url.searchParams.get("arbitrage") === "1";
 
-  const markets = await getAllMarkets();
+  // Get the locally cached market universe (200 Poly + 500 Kalshi + Manifold)
+  const local = await getAllMarkets();
 
-  const filtered = applyFilters(markets, {
+  // If the user has typed a query, also call Polymarket's server-side
+  // publicSearch to find long-tail markets that aren't in our top-N cache.
+  // This is what makes "OpenAI" or "recession" actually return results.
+  let remoteHits: NormalizedMarket[] = [];
+  if (q) {
+    try {
+      remoteHits = await searchPolymarket(q, 30);
+    } catch {}
+  }
+
+  // Merge: dedupe by id, prefer local record (it has more data)
+  const merged = new Map<string, NormalizedMarket>();
+  for (const m of local) merged.set(m.id, m);
+  for (const m of remoteHits) if (!merged.has(m.id)) merged.set(m.id, m);
+
+  const universe = [...merged.values()];
+
+  const filtered = applyFilters(universe, {
     platform, category, minYes, maxYes, minVolume24h, closesWithinDays,
   });
 
@@ -38,11 +58,10 @@ export async function GET(req: NextRequest) {
   const results = ranked.slice(0, limit);
 
   let arbitrage: ReturnType<typeof getArbitrageOpportunities> = [];
-  if (includeArbitrage) arbitrage = getArbitrageOpportunities(filtered).slice(0, 20);
+  if (includeArbitrage) arbitrage = getArbitrageOpportunities(universe).slice(0, 20);
 
-  // Build faceted counts (light) for UI
-  const platformCounts = aggregate(filtered, (m) => m.platform);
-  const categoryCounts = aggregate(filtered, (m) => m.category || "Other");
+  const platformCounts = aggregate(universe, (m) => m.platform);
+  const categoryCounts = aggregate(universe, (m) => m.category || "Other");
 
   return NextResponse.json({
     query: q,

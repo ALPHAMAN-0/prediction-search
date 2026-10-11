@@ -103,45 +103,41 @@ export function scoreMarket(market: NormalizedMarket, query: string, queryTokens
 
   let score = 0;
   let titleTokenHits = 0;
-  let descTokenHits = 0;
   const queryTokenCount = queryTokens.length || 1;
 
   // Exact phrase boost (huge)
   const qLower = query.toLowerCase().trim();
-  if (qLower.length >= 3 && title.includes(qLower)) score += 50;
-  if (qLower.length >= 3 && desc.includes(qLower)) score += 4;
+  if (qLower.length >= 3 && title.includes(qLower)) score += 80;
+  if (qLower.length >= 3 && desc.includes(qLower)) score += 2;
 
   // Token-level scoring with synonym expansion
   for (const t of queryTokens) {
     const variants = expandToken(t);
     let bestTokenScore = 0;
     let titleHit = false;
-    let descHit = false;
     for (const v of variants) {
       let s = 0;
-      if (countOccurrences(title, v) > 0) { s += 15; titleHit = true; }
-      if (countOccurrences(tags, v) > 0) s += 5;
-      if (countOccurrences(category, v) > 0) s += 4;
-      if (countOccurrences(desc, v) > 0) { s += 1; descHit = true; }
+      if (countOccurrences(title, v) > 0) { s += 25; titleHit = true; }
+      if (countOccurrences(tags, v) > 0) s += 8;
+      if (countOccurrences(category, v) > 0) s += 6;
       if (s > bestTokenScore) bestTokenScore = s;
     }
     score += bestTokenScore;
     if (titleHit) titleTokenHits += 1;
-    if (descHit && !titleHit) descTokenHits += 1;
   }
 
   // Coverage: reward markets that match MORE of the user's tokens in the title
   if (titleTokenHits > 0) {
     const coverage = titleTokenHits / queryTokenCount;
-    score += coverage * 20;
+    score += coverage * 30;
   }
 
-  // Hard penalty for zero title hits — only matched in description/tags/category
+  // Very hard penalty for zero title hits — they only matched in tags/category
   if (titleTokenHits === 0) {
-    score *= 0.15;
+    score *= 0.05;
   }
 
-  // Light activity boost — only when there is already a meaningful relevance match
+  // Activity boost — only meaningful when there is a relevance match
   const vol = market.volume24h || market.totalVolume || 0;
   if (vol > 0 && score > 6) score += Math.log10(vol + 10) * 0.3;
 
