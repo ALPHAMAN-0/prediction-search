@@ -1,0 +1,15 @@
+node_modules
+.next
+.env*.local
+.DS_Store
+*.tsbuildinfo
+
+# Sibling directories in the same parent folder
+/Plagiarism_Detected
+/prediction/Plagiarism_Detected
+
+# Editor / tool
+.puku-cli
+.vscode
+.idea
+*.log
