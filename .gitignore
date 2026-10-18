@@ -10,6 +10,6 @@ node_modules
 
 # Editor / tool
 .puku-cli
-.vscode
 .idea
 *.log
+config.bat
