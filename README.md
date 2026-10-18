@@ -2,6 +2,18 @@
 
 One search bar across every major prediction market. Searches **Polymarket** + **Kalshi** in parallel, with synonym expansion, faceted filters, cross-platform arbitrage detection, and a local watchlist — no login required.
 
+## Architecture / How it Works
+
+```mermaid
+flowchart LR
+    A[User] --> B[Prediction Search]
+    B --> C{Logic}
+    C --> D[(Data)]
+    C --> E[Output]
+    D --> C
+```
+
+
 ## Why it exists
 
 Single-platform prediction sites (Polymarket, Kalshi) bury search inside categories, hide it behind login, or don't show cross-platform prices at all. Predictry gives you one unified search with:
