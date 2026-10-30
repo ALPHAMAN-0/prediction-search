@@ -12,4 +12,3 @@ node_modules
 .puku-cli
 .idea
 *.log
-config.bat
